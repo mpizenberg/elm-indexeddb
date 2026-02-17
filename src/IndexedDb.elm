@@ -16,6 +16,24 @@ module IndexedDb exposing
 {-| IndexedDB support for Elm via elm-concurrent-task.
 
 
+# Design Decisions
+
+  - Single database per schema — one `Db` handle, one connection
+  - Phantom types enforce key discipline at compile time
+  - Each operation runs in its own transaction (no multi-store transactions)
+  - Batch operations (`putMany`, etc.) run in a single transaction for atomicity
+  - `get` returns `Maybe` for missing keys instead of an error, matching native IndexedDB behavior
+  - Relies on `elm-concurrent-task` for all async JS interop
+
+
+# Not Yet Supported
+
+  - Indexes (secondary keys on stores)
+  - Key ranges / cursors (partial reads, iteration)
+  - Multi-store transactions
+  - Compound key paths
+
+
 # Initialization
 
 @docs Schema, schema, withStore
@@ -70,6 +88,7 @@ module IndexedDb exposing
 -}
 
 import ConcurrentTask exposing (ConcurrentTask)
+import Set
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode exposing (Value)
 
@@ -188,7 +207,7 @@ configuration can be added to the same schema.
 -}
 withStore : Store k -> Schema -> Schema
 withStore (Store config) (Schema s) =
-    Schema { s | stores = s.stores ++ [ config ] }
+    Schema { s | stores = config :: s.stores }
 
 
 
@@ -209,13 +228,35 @@ as needed (adding new stores, removing stores not in the schema).
 -}
 open : Schema -> ConcurrentTask Error Db
 open (Schema s) =
-    ConcurrentTask.define
-        { function = "indexeddb:open"
-        , expect = ConcurrentTask.expectWhatever
-        , errors = ConcurrentTask.expectErrors errorDecoder
-        , args = encodeSchema (Schema s)
-        }
-        |> ConcurrentTask.map (\() -> Db s.name)
+    let
+        stores : List StoreConfig
+        stores =
+            List.reverse s.stores
+
+        names : List String
+        names =
+            List.map .name stores
+
+        duplicates : List String
+        duplicates =
+            findDuplicates names
+    in
+    if List.isEmpty duplicates then
+        ConcurrentTask.define
+            { function = "indexeddb:open"
+            , expect = ConcurrentTask.expectWhatever
+            , errors = ConcurrentTask.expectErrors errorDecoder
+            , args = encodeSchema s.name s.version stores
+            }
+            |> ConcurrentTask.map (\() -> Db s.name)
+
+    else
+        ConcurrentTask.fail
+            (DatabaseError
+                ("Duplicate store names in schema: "
+                    ++ String.join ", " duplicates
+                )
+            )
 
 
 {-| Delete a database. Closes the connection first.
@@ -627,12 +668,12 @@ keyDecoder =
             )
 
 
-encodeSchema : Schema -> Value
-encodeSchema (Schema s) =
+encodeSchema : String -> Int -> List StoreConfig -> Value
+encodeSchema name version stores =
     Encode.object
-        [ ( "name", Encode.string s.name )
-        , ( "version", Encode.int s.version )
-        , ( "stores", Encode.list encodeStoreConfig s.stores )
+        [ ( "name", Encode.string name )
+        , ( "version", Encode.int version )
+        , ( "stores", Encode.list encodeStoreConfig stores )
         ]
 
 
@@ -674,6 +715,22 @@ errorDecoder =
                         _ ->
                             Decode.fail ("Unknown IndexedDB error: " ++ err)
             )
+
+
+findDuplicates : List String -> List String
+findDuplicates names =
+    names
+        |> List.foldl
+            (\name ( seen, dupes ) ->
+                if Set.member name seen then
+                    ( seen, Set.insert name dupes )
+
+                else
+                    ( Set.insert name seen, dupes )
+            )
+            ( Set.empty, Set.empty )
+        |> Tuple.second
+        |> Set.toList
 
 
 splitOnce : String -> String -> Maybe ( String, String )
