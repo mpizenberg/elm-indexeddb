@@ -51,16 +51,6 @@ settingsStore =
     IndexedDb.defineStore "settings"
 ```
 
-The compiler prevents invalid combinations:
-
-```elm
--- ERROR: withAutoIncrement expects Store ExplicitKey, got Store InlineKey
-defineStore "x" |> withKeyPath "id" |> withAutoIncrement
-
--- ERROR: put expects Store InlineKey, got Store ExplicitKey
-put db settingsStore myValue
-```
-
 ## Defining a Schema
 
 ```elm
