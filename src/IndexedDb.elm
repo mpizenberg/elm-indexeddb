@@ -88,9 +88,9 @@ module IndexedDb exposing
 -}
 
 import ConcurrentTask exposing (ConcurrentTask)
-import Set
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode exposing (Value)
+import Set
 
 
 
