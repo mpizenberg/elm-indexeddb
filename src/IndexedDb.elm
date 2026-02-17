@@ -16,7 +16,7 @@ module IndexedDb exposing
 {-| IndexedDB support for Elm via elm-concurrent-task.
 
 
-# Schema
+# Initialization
 
 @docs Schema, schema, withStore
 @docs Store, defineStore, withKeyPath, withAutoIncrement
