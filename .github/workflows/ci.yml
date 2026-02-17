@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  ELM_HOME: ~/.elm
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,7 +17,19 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
+
       - run: npm ci
+        env:
+          NO_ELM_TOOLING_INSTALL: 1
+
+      - name: Cache ELM_HOME
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ELM_HOME }}
+          key: elm-${{ hashFiles('elm.json', 'elm-tooling.json', 'review/elm.json') }}
+          restore-keys: elm-
+
+      - run: npx elm-tooling install
       - run: npx elm make --docs docs.json
       - run: npx elm-format --validate src/
       - run: npx elm-review
