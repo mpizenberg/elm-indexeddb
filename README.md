@@ -8,7 +8,9 @@ Two parts: an **Elm module** (`IndexedDb`) and a **JS companion** (`elm-indexedd
 
 ### Elm
 
-Add `elm-indexeddb/elm/src` to your app's `source-directories` in `elm.json`, and add `andrewMacmurray/elm-concurrent-task` as a dependency.
+```bash
+elm install mpizenberg/elm-indexeddb
+```
 
 ### JS
 
