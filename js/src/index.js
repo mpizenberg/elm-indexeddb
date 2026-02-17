@@ -72,7 +72,10 @@ function normalizeError(error) {
   if (error?.name === "QuotaExceededError") {
     return { error: "QUOTA_EXCEEDED" };
   }
-  if (error?.name === "TransactionInactiveError" || error?.name === "AbortError") {
+  if (
+    error?.name === "TransactionInactiveError" ||
+    error?.name === "AbortError"
+  ) {
     return { error: "TRANSACTION_ERROR:" + msg };
   }
   return { error: "DATABASE_ERROR:" + msg };
@@ -145,7 +148,9 @@ function handleOpen(databases, { name, version, stores }) {
           const existing = tx.objectStore(storeDef.name);
           const existingKeyPath = existing.keyPath;
           const wantedKeyPath = storeDef.keyPath;
-          if (JSON.stringify(existingKeyPath) !== JSON.stringify(wantedKeyPath)) {
+          if (
+            JSON.stringify(existingKeyPath) !== JSON.stringify(wantedKeyPath)
+          ) {
             schemaError =
               "DATABASE_ERROR:Store '" +
               storeDef.name +
@@ -231,14 +236,16 @@ function handleCount(databases, { db: dbName, store: storeName }) {
 
 function handlePut(databases, { db: dbName, store: storeName, value, key }) {
   return writeOp(databases, dbName, storeName, (store, _tx, resolve) => {
-    const request = key !== undefined ? store.put(value, decodeKey(key)) : store.put(value);
+    const request =
+      key !== undefined ? store.put(value, decodeKey(key)) : store.put(value);
     request.onsuccess = () => resolve(encodeKey(request.result));
   });
 }
 
 function handleAdd(databases, { db: dbName, store: storeName, value, key }) {
   return writeOp(databases, dbName, storeName, (store, _tx, resolve) => {
-    const request = key !== undefined ? store.add(value, decodeKey(key)) : store.add(value);
+    const request =
+      key !== undefined ? store.add(value, decodeKey(key)) : store.add(value);
     request.onsuccess = () => resolve(encodeKey(request.result));
   });
 }
