@@ -63,6 +63,7 @@ mySchema =
 ```
 
 When you bump the version number, `open` will automatically:
+
 - Create stores that are new in the schema
 - Delete stores that are missing from the schema
 - Keep existing stores with matching names as-is
@@ -122,6 +123,9 @@ IndexedDb.addAt db settingsStore (IndexedDb.StringKey "theme") (Encode.string "d
 ```elm
 IndexedDb.insert db cacheStore (Encode.object [ ... ])
 -- ConcurrentTask Error Key  (always succeeds, returns generated key)
+
+IndexedDb.replace db cacheStore myKey (Encode.object [ ... ])
+-- ConcurrentTask Error ()   (update an existing record by key)
 ```
 
 ### Deleting (any store type)

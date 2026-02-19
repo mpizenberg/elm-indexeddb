@@ -7,7 +7,7 @@ module IndexedDb exposing
     , get, getAll, getAllKeys, count
     , put, add
     , putAt, addAt
-    , insert
+    , insert, replace
     , delete, clear
     , putMany, putManyAt, insertMany, deleteMany
     , Error(..)
@@ -68,7 +68,7 @@ module IndexedDb exposing
 
 # Write Operations — GeneratedKey stores
 
-@docs insert
+@docs insert, replace
 
 
 # Delete Operations
@@ -477,6 +477,25 @@ insert db store value =
             Encode.object
                 [ ( "db", Encode.string (getDbName db) )
                 , ( "store", Encode.string (getStoreName store) )
+                , ( "value", value )
+                ]
+        }
+
+
+{-| Replace a value at the given key in a GeneratedKey store.
+Use this to update an existing record whose key was returned by `insert`.
+-}
+replace : Db -> Store GeneratedKey -> Key -> Value -> ConcurrentTask Error ()
+replace db store key value =
+    ConcurrentTask.define
+        { function = "indexeddb:put"
+        , expect = ConcurrentTask.expectWhatever
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "key", encodeKey key )
                 , ( "value", value )
                 ]
         }
