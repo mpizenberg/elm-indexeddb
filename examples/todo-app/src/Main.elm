@@ -160,23 +160,22 @@ initDefaults db =
 
 
 {-| Load all data concurrently.
-Exercises: getAll, get, count, getAllKeys (parallel via map4)
+Exercises: getAll, get, count (parallel via map3)
 -}
 loadData : Idb.Db -> ConcurrentTask Idb.Error AppData
 loadData db =
-    ConcurrentTask.map4
-        (\todos theme logCount todoKeys ->
+    ConcurrentTask.map3
+        (\todoPairs theme logCount ->
             { db = db
-            , todos = todos
+            , todos = List.map Tuple.second todoPairs
             , theme = theme |> Maybe.withDefault "light"
             , logCount = logCount
-            , todoKeys = todoKeys
+            , todoKeys = List.map Tuple.first todoPairs
             }
         )
         (Idb.getAll db todosStore todoDecoder)
         (Idb.get db settingsStore (Idb.StringKey "theme") Decode.string)
         (Idb.count db logStore)
-        (Idb.getAllKeys db todosStore)
 
 
 {-| Insert a new todo (fails if id exists) and log the action concurrently.
@@ -227,6 +226,7 @@ addSampleDataTask db =
         [ Idb.putMany db todosStore sampleTodoValues
         , Idb.putManyAt db settingsStore sampleSettingPairs
         , Idb.insertMany db logStore sampleLogValues
+            |> ConcurrentTask.map (\_ -> ())
         ]
         |> ConcurrentTask.andThenDo (loadData db)
 

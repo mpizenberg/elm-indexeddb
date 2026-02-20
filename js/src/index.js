@@ -215,8 +215,23 @@ function handleGet(databases, { db: dbName, store: storeName, key }) {
 
 function handleGetAll(databases, { db: dbName, store: storeName }) {
   return readOp(databases, dbName, storeName, (store, resolve) => {
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result);
+    const keysReq = store.getAllKeys();
+    const valuesReq = store.getAll();
+    let keys = null;
+    let values = null;
+    function tryResolve() {
+      if (keys !== null && values !== null) {
+        resolve(keys.map((k, i) => ({ key: encodeKey(k), value: values[i] })));
+      }
+    }
+    keysReq.onsuccess = () => {
+      keys = keysReq.result;
+      tryResolve();
+    };
+    valuesReq.onsuccess = () => {
+      values = valuesReq.result;
+      tryResolve();
+    };
   });
 }
 
@@ -292,10 +307,12 @@ function handleAddMany(databases, { db: dbName, store: storeName, entries }) {
 
 function handleInsertMany(databases, { db: dbName, store: storeName, values }) {
   return writeOp(databases, dbName, storeName, (store, tx, resolve) => {
+    const keys = [];
     for (const value of values) {
-      store.put(value);
+      const request = store.put(value);
+      request.onsuccess = () => keys.push(encodeKey(request.result));
     }
-    tx.oncomplete = () => resolve({});
+    tx.oncomplete = () => resolve(keys);
   });
 }
 

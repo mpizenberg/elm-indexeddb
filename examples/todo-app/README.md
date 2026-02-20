@@ -26,7 +26,7 @@ appSchema = IndexedDb.schema "todoapp" 1
 
 ## API coverage
 
-Every elm-indexeddb function is used in this example:
+Many elm-indexeddb functions are used in this example:
 
 | Function              | Where used                                                   |
 | --------------------- | ------------------------------------------------------------ |
@@ -37,8 +37,7 @@ Every elm-indexeddb function is used in this example:
 | `open`                | `loadApp` — opens database, applies schema                   |
 | `deleteDatabase`      | "Reset database" button — deletes and re-opens               |
 | `get`                 | `loadData` — reads theme setting (`Maybe String`)            |
-| `getAll`              | `loadData` — loads all todos                                 |
-| `getAllKeys`          | `loadData` — fetches todo primary keys for display           |
+| `getAll`              | `loadData` — loads all todos with their keys                 |
 | `count`               | `loadData` — counts log entries                              |
 | `add`                 | `addTodoTask` — insert-only (fails if id exists)             |
 | `put`                 | `toggleTodoTask` — upserts toggled todo                      |
@@ -58,7 +57,7 @@ The `keyToString` helper also pattern-matches all four `Key` constructors (`Stri
 
 - **Phantom types**: `Store InlineKey` means the key comes from the value's `keyPath`. The compiler prevents calling `putAt` (which requires `Store ExplicitKey`) on this store.
 - **`addAt` with error recovery**: `initDefaults` uses `addAt` to seed a default theme, then `onError` to silently ignore `AlreadyExists` on subsequent loads.
-- **Parallel loading**: `loadData` uses `ConcurrentTask.map4` to run `getAll`, `get`, `count`, and `getAllKeys` concurrently.
+- **Parallel loading**: `loadData` uses `ConcurrentTask.map3` to run `getAll`, `get`, and `count` concurrently.
 - **Parallel writes**: `addTodoTask` uses `ConcurrentTask.map2` to insert the todo and log entry concurrently.
 - **Batch + reload**: "Add sample data" uses `ConcurrentTask.batch` for parallel batch writes, then `andThenDo` to reload data.
 - **Reset cycle**: "Reset database" calls `deleteDatabase`, then re-runs the full `loadApp` flow (`open` → `addAt` defaults → `loadData`).

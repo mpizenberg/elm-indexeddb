@@ -5,11 +5,10 @@ module IndexedDb exposing
     , Db, open, deleteDatabase
     , Key(..)
     , get, getAll, getAllKeys, count
-    , put, add
-    , putAt, addAt
-    , insert, replace
-    , delete, clear
-    , putMany, putManyAt, insertMany, deleteMany
+    , put, add, putMany
+    , putAt, addAt, putManyAt
+    , insert, replace, insertMany, replaceMany
+    , delete, deleteMany, clear
     , Error(..)
     )
 
@@ -21,7 +20,7 @@ module IndexedDb exposing
   - Single database per schema — one `Db` handle, one connection
   - Phantom types enforce key discipline at compile time
   - Each operation runs in its own transaction (no multi-store transactions)
-  - Batch operations (`putMany`, etc.) run in a single transaction for atomicity
+  - Batch variants (`putMany`, etc.) run in a single transaction for atomicity
   - `get` returns `Maybe` for missing keys instead of an error, matching native IndexedDB behavior
   - Relies on `elm-concurrent-task` for all async JS interop
 
@@ -58,27 +57,22 @@ module IndexedDb exposing
 
 # Write Operations — InlineKey stores
 
-@docs put, add
+@docs put, add, putMany
 
 
 # Write Operations — ExplicitKey stores
 
-@docs putAt, addAt
+@docs putAt, addAt, putManyAt
 
 
 # Write Operations — GeneratedKey stores
 
-@docs insert, replace
+@docs insert, replace, insertMany, replaceMany
 
 
 # Delete Operations
 
-@docs delete, clear
-
-
-# Batch Operations
-
-@docs putMany, putManyAt, insertMany, deleteMany
+@docs delete, deleteMany, clear
 
 
 # Errors
@@ -331,13 +325,21 @@ get db store key decoder =
         }
 
 
-{-| Get all records in a store.
+{-| Get all records in a store, with their keys.
+Both keys and values are retrieved in a single transaction for consistency.
 -}
-getAll : Db -> Store k -> Decoder a -> ConcurrentTask Error (List a)
+getAll : Db -> Store k -> Decoder a -> ConcurrentTask Error (List ( Key, a ))
 getAll db store decoder =
     ConcurrentTask.define
         { function = "indexeddb:getAll"
-        , expect = ConcurrentTask.expectJson (Decode.list decoder)
+        , expect =
+            ConcurrentTask.expectJson
+                (Decode.list
+                    (Decode.map2 Tuple.pair
+                        (Decode.field "key" keyDecoder)
+                        (Decode.field "value" decoder)
+                    )
+                )
         , errors = ConcurrentTask.expectErrors errorDecoder
         , args =
             Encode.object
@@ -419,6 +421,23 @@ add db store value =
         }
 
 
+{-| Put many values into an InlineKey store in a single transaction.
+-}
+putMany : Db -> Store InlineKey -> List Value -> ConcurrentTask Error ()
+putMany db store values =
+    ConcurrentTask.define
+        { function = "indexeddb:putMany"
+        , expect = ConcurrentTask.expectWhatever
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "entries", Encode.list (\v -> Encode.object [ ( "value", v ) ]) values )
+                ]
+        }
+
+
 
 -- WRITE OPERATIONS: ExplicitKey
 
@@ -456,6 +475,32 @@ addAt db store key value =
                 , ( "store", Encode.string (getStoreName store) )
                 , ( "key", encodeKey key )
                 , ( "value", value )
+                ]
+        }
+
+
+{-| Put many key-value pairs into an ExplicitKey store in a single transaction.
+-}
+putManyAt : Db -> Store ExplicitKey -> List ( Key, Value ) -> ConcurrentTask Error ()
+putManyAt db store pairs =
+    ConcurrentTask.define
+        { function = "indexeddb:putMany"
+        , expect = ConcurrentTask.expectWhatever
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "entries"
+                  , Encode.list
+                        (\( k, v ) ->
+                            Encode.object
+                                [ ( "key", encodeKey k )
+                                , ( "value", v )
+                                ]
+                        )
+                        pairs
+                  )
                 ]
         }
 
@@ -501,6 +546,51 @@ replace db store key value =
         }
 
 
+{-| Insert many values into a GeneratedKey store in a single transaction.
+Returns the generated keys in the same order as the input values.
+-}
+insertMany : Db -> Store GeneratedKey -> List Value -> ConcurrentTask Error (List Key)
+insertMany db store values =
+    ConcurrentTask.define
+        { function = "indexeddb:insertMany"
+        , expect = ConcurrentTask.expectJson (Decode.list keyDecoder)
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "values", Encode.list identity values )
+                ]
+        }
+
+
+{-| Replace many values in a GeneratedKey store in a single transaction.
+Use this to update existing records whose keys were returned by `insert` or `insertMany`.
+-}
+replaceMany : Db -> Store GeneratedKey -> List ( Key, Value ) -> ConcurrentTask Error ()
+replaceMany db store pairs =
+    ConcurrentTask.define
+        { function = "indexeddb:putMany"
+        , expect = ConcurrentTask.expectWhatever
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "entries"
+                  , Encode.list
+                        (\( k, v ) ->
+                            Encode.object
+                                [ ( "key", encodeKey k )
+                                , ( "value", v )
+                                ]
+                        )
+                        pairs
+                  )
+                ]
+        }
+
+
 
 -- DELETE OPERATIONS
 
@@ -534,70 +624,6 @@ clear db store =
             Encode.object
                 [ ( "db", Encode.string (getDbName db) )
                 , ( "store", Encode.string (getStoreName store) )
-                ]
-        }
-
-
-
--- BATCH OPERATIONS
-
-
-{-| Put many values into an InlineKey store in a single transaction.
--}
-putMany : Db -> Store InlineKey -> List Value -> ConcurrentTask Error ()
-putMany db store values =
-    ConcurrentTask.define
-        { function = "indexeddb:putMany"
-        , expect = ConcurrentTask.expectWhatever
-        , errors = ConcurrentTask.expectErrors errorDecoder
-        , args =
-            Encode.object
-                [ ( "db", Encode.string (getDbName db) )
-                , ( "store", Encode.string (getStoreName store) )
-                , ( "entries", Encode.list (\v -> Encode.object [ ( "value", v ) ]) values )
-                ]
-        }
-
-
-{-| Put many key-value pairs into an ExplicitKey store in a single transaction.
--}
-putManyAt : Db -> Store ExplicitKey -> List ( Key, Value ) -> ConcurrentTask Error ()
-putManyAt db store pairs =
-    ConcurrentTask.define
-        { function = "indexeddb:putMany"
-        , expect = ConcurrentTask.expectWhatever
-        , errors = ConcurrentTask.expectErrors errorDecoder
-        , args =
-            Encode.object
-                [ ( "db", Encode.string (getDbName db) )
-                , ( "store", Encode.string (getStoreName store) )
-                , ( "entries"
-                  , Encode.list
-                        (\( k, v ) ->
-                            Encode.object
-                                [ ( "key", encodeKey k )
-                                , ( "value", v )
-                                ]
-                        )
-                        pairs
-                  )
-                ]
-        }
-
-
-{-| Insert many values into a GeneratedKey store in a single transaction.
--}
-insertMany : Db -> Store GeneratedKey -> List Value -> ConcurrentTask Error ()
-insertMany db store values =
-    ConcurrentTask.define
-        { function = "indexeddb:insertMany"
-        , expect = ConcurrentTask.expectWhatever
-        , errors = ConcurrentTask.expectErrors errorDecoder
-        , args =
-            Encode.object
-                [ ( "db", Encode.string (getDbName db) )
-                , ( "store", Encode.string (getStoreName store) )
-                , ( "values", Encode.list identity values )
                 ]
         }
 
