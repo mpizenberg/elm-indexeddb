@@ -23,7 +23,6 @@ export function createTasks() {
     "indexeddb:delete": (args) => handleDelete(databases, args),
     "indexeddb:clear": (args) => handleClear(databases, args),
     "indexeddb:putMany": (args) => handlePutMany(databases, args),
-    "indexeddb:addMany": (args) => handleAddMany(databases, args),
     "indexeddb:insertMany": (args) => handleInsertMany(databases, args),
     "indexeddb:deleteMany": (args) => handleDeleteMany(databases, args),
   };
@@ -286,19 +285,6 @@ function handlePutMany(databases, { db: dbName, store: storeName, entries }) {
         store.put(entry.value, decodeKey(entry.key));
       } else {
         store.put(entry.value);
-      }
-    }
-    tx.oncomplete = () => resolve({});
-  });
-}
-
-function handleAddMany(databases, { db: dbName, store: storeName, entries }) {
-  return writeOp(databases, dbName, storeName, (store, tx, resolve) => {
-    for (const entry of entries) {
-      if (entry.key !== undefined) {
-        store.add(entry.value, decodeKey(entry.key));
-      } else {
-        store.add(entry.value);
       }
     }
     tx.oncomplete = () => resolve({});
