@@ -306,18 +306,22 @@ resetDatabaseTask db =
 
 
 {-| Query events within a time range via the timestamp index.
-Exercises: getByIndex, between, PosixKey
+The timestamp field is stored as an integer (millis), so we query with IntKey.
+Exercises: getByIndex, between, IntKey
 -}
 queryRecentEventsTask : Idb.Db -> Time.Posix -> ConcurrentTask Idb.Error (List Event)
 queryRecentEventsTask db now =
     let
-        fiveMinutesAgo =
-            Time.millisToPosix (Time.posixToMillis now - 5 * 60 * 1000)
+        nowMs =
+            Time.posixToMillis now
+
+        fiveMinutesAgoMs =
+            nowMs - 5 * 60 * 1000
     in
     Idb.getByIndex db
         eventsStore
         byTimestamp
-        (Idb.between (Idb.PosixKey fiveMinutesAgo) (Idb.PosixKey now))
+        (Idb.between (Idb.IntKey fiveMinutesAgoMs) (Idb.IntKey nowMs))
         eventDecoder
         |> ConcurrentTask.map (List.map Tuple.second)
 

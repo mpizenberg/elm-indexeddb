@@ -48,7 +48,7 @@ eventsStore =
 
 The Activity Log section queries events using ranges and indexes:
 
-- **Time range**: "Last 5 min" uses `getByIndex` with `between (PosixKey fiveMinAgo) (PosixKey now)` on the timestamp index
+- **Time range**: "Last 5 min" uses `getByIndex` with `between (IntKey fiveMinAgoMs) (IntKey nowMs)` on the timestamp index
 - **Action filter**: buttons like "add_todo" use `getByIndex` with `only (StringKey "add_todo")` on the action index
 - **All events**: uses `getAll` without any range
 
@@ -80,7 +80,7 @@ Every user action (add, toggle, delete, theme change) inserts an event with the 
 | `getAllKeys`                       | `loadData` -- retrieves todo keys                   |
 | `count`                            | `loadData` -- counts events                         |
 | `getByIndex`                       | `queryRecentEventsTask`, `queryEventsByActionTask`  |
-| `between`, `PosixKey`              | Time range query in `queryRecentEventsTask`         |
+| `between`, `IntKey`                | Time range query in `queryRecentEventsTask`         |
 | `only`, `StringKey`                | Action filter in `queryEventsByActionTask`          |
 | `add`                              | `addTodoTask` -- insert-only                        |
 | `put`                              | `toggleTodoTask` -- upsert toggled todo             |
