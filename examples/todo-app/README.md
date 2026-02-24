@@ -1,68 +1,8 @@
-# TODO app example with elm-indexeddb
+# Todo app example
 
-This example demonstrates elm-indexeddb for persistent browser storage in Elm. It implements a todo list that aims to exercise every function in the elm-indexeddb API.
+A todo list that persists in IndexedDB, demonstrating every `elm-indexeddb` feature: three store types, secondary indexes, key range queries, time-based filtering, and batch operations.
 
-## How it works
-
-`elm-indexeddb` wraps the browser's IndexedDB API as composable `ConcurrentTask` operations. It uses phantom types to enforce correct store operations at compile time.
-
-The app defines three stores (one of each type) and a schema:
-
-```elm
-todosStore : IndexedDb.Store IndexedDb.InlineKey          -- key from value's "id" field
-todosStore = IndexedDb.defineStore "todos" |> IndexedDb.withKeyPath "id"
-
-settingsStore : IndexedDb.Store IndexedDb.ExplicitKey     -- key provided on each write
-settingsStore = IndexedDb.defineStore "settings"
-
-logStore : IndexedDb.Store IndexedDb.GeneratedKey         -- key auto-generated
-logStore = IndexedDb.defineStore "log" |> IndexedDb.withAutoIncrement
-
-appSchema = IndexedDb.schema "todoapp" 1
-    |> IndexedDb.withStore todosStore
-    |> IndexedDb.withStore settingsStore
-    |> IndexedDb.withStore logStore
-```
-
-## API coverage
-
-Many elm-indexeddb functions are used in this example:
-
-| Function              | Where used                                                   |
-| --------------------- | ------------------------------------------------------------ |
-| `schema`, `withStore` | `appSchema` — builds the schema with all 3 stores            |
-| `defineStore`         | All 3 store definitions                                      |
-| `withKeyPath`         | `todosStore` (InlineKey)                                     |
-| `withAutoIncrement`   | `logStore` (GeneratedKey)                                    |
-| `open`                | `loadApp` — opens database, applies schema                   |
-| `deleteDatabase`      | "Reset database" button — deletes and re-opens               |
-| `get`                 | `loadData` — reads theme setting (`Maybe String`)            |
-| `getAll`              | `loadData` — loads all todos with their keys                 |
-| `count`               | `loadData` — counts log entries                              |
-| `add`                 | `addTodoTask` — insert-only (fails if id exists)             |
-| `put`                 | `toggleTodoTask` — upserts toggled todo                      |
-| `addAt`               | `initDefaults` — seeds default theme (ignores AlreadyExists) |
-| `putAt`               | `toggleThemeTask` — saves theme to settings store            |
-| `insert`              | `addTodoTask` — logs action with auto-generated key          |
-| `delete`              | `deleteTodoTask` — removes a single todo                     |
-| `clear`               | "Clear todos" button — empties the todos store               |
-| `putMany`             | "Add sample data" — batch-inserts sample todos               |
-| `putManyAt`           | "Add sample data" — batch-inserts sample settings            |
-| `insertMany`          | "Add sample data" — batch-inserts sample log entries         |
-| `deleteMany`          | "Delete completed" button — removes all done todos           |
-
-The `keyToString` helper also pattern-matches all four `Key` constructors (`StringKey`, `IntKey`, `FloatKey`, `CompoundKey`).
-
-## Key patterns
-
-- **Phantom types**: `Store InlineKey` means the key comes from the value's `keyPath`. The compiler prevents calling `putAt` (which requires `Store ExplicitKey`) on this store.
-- **`addAt` with error recovery**: `initDefaults` uses `addAt` to seed a default theme, then `onError` to silently ignore `AlreadyExists` on subsequent loads.
-- **Parallel loading**: `loadData` uses `ConcurrentTask.map3` to run `getAll`, `get`, and `count` concurrently.
-- **Parallel writes**: `addTodoTask` uses `ConcurrentTask.map2` to insert the todo and log entry concurrently.
-- **Batch + reload**: "Add sample data" uses `ConcurrentTask.batch` for parallel batch writes, then `andThenDo` to reload data.
-- **Reset cycle**: "Reset database" calls `deleteDatabase`, then re-runs the full `loadApp` flow (`open` → `addAt` defaults → `loadData`).
-
-## Running the example
+## Running
 
 ```sh
 npm install
@@ -72,19 +12,99 @@ cd static
 python -m http.server 8000
 ```
 
-Open `http://localhost:8000` in your browser. Add some todos, reload the page — they persist. Toggle the theme — it persists too.
+Open `http://localhost:8000`. Add todos, reload the page -- they persist. Toggle the theme -- it persists too. Check the Activity Log section to see index and range queries in action.
+
+## What the app demonstrates
+
+### Three store types
+
+```elm
+todosStore : Idb.Store Idb.InlineKey          -- key from value's "id" field
+settingsStore : Idb.Store Idb.ExplicitKey     -- key provided on each write
+eventsStore : Idb.Store Idb.GeneratedKey      -- key auto-generated
+```
+
+The compiler enforces correct operations per store type. You cannot call `putAt` on an `InlineKey` store, or `put` on a `GeneratedKey` store.
+
+### Secondary indexes
+
+The events store has two indexes for efficient queries:
+
+```elm
+byTimestamp : Idb.Index
+byTimestamp = Idb.defineIndex "by_timestamp" "timestamp"
+
+byAction : Idb.Index
+byAction = Idb.defineIndex "by_action" "action"
+
+eventsStore =
+    Idb.defineStore "events"
+        |> Idb.withAutoIncrement
+        |> Idb.withIndex byTimestamp
+        |> Idb.withIndex byAction
+```
+
+### Key range queries
+
+The Activity Log section queries events using ranges and indexes:
+
+- **Time range**: "Last 5 min" uses `getByIndex` with `between (PosixKey fiveMinAgo) (PosixKey now)` on the timestamp index
+- **Action filter**: buttons like "add_todo" use `getByIndex` with `only (StringKey "add_todo")` on the action index
+- **All events**: uses `getAll` without any range
+
+### Event logging with timestamps
+
+Every user action (add, toggle, delete, theme change) inserts an event with the current `Time.Posix`, which the timestamp index stores as a native `Date` for correct ordering.
+
+### Patterns worth noting
+
+- **`addAt` with error recovery**: `initDefaults` seeds a default theme, then `onError` silently ignores `AlreadyExists` on subsequent loads.
+- **Parallel loading**: `loadData` uses `ConcurrentTask.map3` to run `getAll`, `get`, and `count` concurrently.
+- **Parallel writes**: `addTodoTask` uses `ConcurrentTask.map2` to insert the todo and log the event concurrently.
+- **Batch + reload**: "Add sample data" uses `ConcurrentTask.batch` for parallel batch writes, then `andThenDo` to reload.
+- **Reset cycle**: "Reset database" calls `deleteDatabase`, then re-runs `open` -> seed defaults -> load data.
+
+## API coverage
+
+| Function                           | Where used                                          |
+| ---------------------------------- | --------------------------------------------------- |
+| `schema`, `withStore`              | `appSchema` -- schema with all 3 stores             |
+| `defineStore`, `withKeyPath`       | `todosStore` (InlineKey)                            |
+| `defineStore`, `withAutoIncrement` | `eventsStore` (GeneratedKey)                        |
+| `defineStore` (bare)               | `settingsStore` (ExplicitKey)                       |
+| `defineIndex`, `withIndex`         | `byTimestamp`, `byAction` on `eventsStore`          |
+| `open`                             | `loadApp` -- opens database, applies schema         |
+| `deleteDatabase`                   | "Reset database" button                             |
+| `get`                              | `loadData` -- reads theme setting                   |
+| `getAll`                           | `loadData` -- loads all todos; `queryAllEventsTask` |
+| `getAllKeys`                       | `loadData` -- retrieves todo keys                   |
+| `count`                            | `loadData` -- counts events                         |
+| `getByIndex`                       | `queryRecentEventsTask`, `queryEventsByActionTask`  |
+| `between`, `PosixKey`              | Time range query in `queryRecentEventsTask`         |
+| `only`, `StringKey`                | Action filter in `queryEventsByActionTask`          |
+| `add`                              | `addTodoTask` -- insert-only                        |
+| `put`                              | `toggleTodoTask` -- upsert toggled todo             |
+| `addAt`                            | `initDefaults` -- seeds default theme               |
+| `putAt`                            | `toggleThemeTask` -- saves theme                    |
+| `insert`                           | Event logging in every action task                  |
+| `delete`                           | `deleteTodoTask` -- removes a single todo           |
+| `deleteMany`                       | "Delete completed" button                           |
+| `clear`                            | "Clear todos" button                                |
+| `putMany`                          | "Add sample data" -- batch todos                    |
+| `putManyAt`                        | "Add sample data" -- batch settings                 |
+| `insertMany`                       | "Add sample data" -- batch events                   |
 
 ## Project structure
 
 ```
-indexeddb/
-  elm.json          -- Elm deps + source-directories includes ../../elm-indexeddb/elm/src
+todo-app/
+  elm.json          -- Elm deps (source-directories includes ../../src)
   package.json      -- JS dependency (@andrewmacmurray/elm-concurrent-task)
   src/
-    Main.elm        -- Elm app: todo list exercising every elm-indexeddb function
-    index.js        -- JS runner: registers elm-indexeddb tasks, wires up ports
+    Main.elm        -- Elm app
+    index.js        -- JS entry: registers elm-indexeddb tasks, wires ports
   static/
-    index.html      -- HTML shell (loads elm.js + main.js)
+    index.html      -- HTML shell
     elm.js          -- compiled Elm output (generated)
     main.js         -- bundled JS output (generated)
 ```

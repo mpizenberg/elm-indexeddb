@@ -38,6 +38,8 @@ function decodeKey(encoded) {
       return encoded.value;
     case "float":
       return encoded.value;
+    case "posix":
+      return new Date(encoded.value);
     case "compound":
       return encoded.value.map(decodeKey);
     default:
@@ -46,7 +48,9 @@ function decodeKey(encoded) {
 }
 
 function encodeKey(native) {
-  if (typeof native === "string") {
+  if (native instanceof Date) {
+    return { type: "posix", value: native.getTime() };
+  } else if (typeof native === "string") {
     return { type: "string", value: native };
   } else if (typeof native === "number") {
     if (Number.isInteger(native)) {
@@ -58,6 +62,28 @@ function encodeKey(native) {
     return { type: "compound", value: native.map(encodeKey) };
   } else {
     throw new Error("Unsupported key type: " + typeof native);
+  }
+}
+
+// --- Key range decoding ---
+
+function decodeKeyRange(encoded) {
+  switch (encoded.type) {
+    case "only":
+      return IDBKeyRange.only(decodeKey(encoded.key));
+    case "lowerBound":
+      return IDBKeyRange.lowerBound(decodeKey(encoded.key), encoded.open);
+    case "upperBound":
+      return IDBKeyRange.upperBound(decodeKey(encoded.key), encoded.open);
+    case "bound":
+      return IDBKeyRange.bound(
+        decodeKey(encoded.lower),
+        decodeKey(encoded.upper),
+        encoded.lowerOpen,
+        encoded.upperOpen,
+      );
+    default:
+      throw new Error("Unknown key range type: " + encoded.type);
   }
 }
 
@@ -142,10 +168,11 @@ function handleOpen(databases, { name, version, stores }) {
 
       // Create or verify stores in schema
       for (const storeDef of stores) {
+        let objectStore;
         if (db.objectStoreNames.contains(storeDef.name)) {
           // Store exists — verify keyPath matches
-          const existing = tx.objectStore(storeDef.name);
-          const existingKeyPath = existing.keyPath;
+          objectStore = tx.objectStore(storeDef.name);
+          const existingKeyPath = objectStore.keyPath;
           const wantedKeyPath = storeDef.keyPath;
           if (
             JSON.stringify(existingKeyPath) !== JSON.stringify(wantedKeyPath)
@@ -170,7 +197,27 @@ function handleOpen(databases, { name, version, stores }) {
           if (storeDef.autoIncrement) {
             options.autoIncrement = true;
           }
-          db.createObjectStore(storeDef.name, options);
+          objectStore = db.createObjectStore(storeDef.name, options);
+        }
+
+        // Sync indexes
+        const schemaIndexNames = (storeDef.indexes || []).map((i) => i.name);
+
+        // Delete indexes not in schema
+        for (const existing of Array.from(objectStore.indexNames)) {
+          if (!schemaIndexNames.includes(existing)) {
+            objectStore.deleteIndex(existing);
+          }
+        }
+
+        // Create indexes in schema that don't exist yet
+        for (const indexDef of storeDef.indexes || []) {
+          if (!objectStore.indexNames.contains(indexDef.name)) {
+            objectStore.createIndex(indexDef.name, indexDef.keyPath, {
+              unique: indexDef.unique,
+              multiEntry: indexDef.multiEntry,
+            });
+          }
         }
       }
     };
@@ -212,10 +259,13 @@ function handleGet(databases, { db: dbName, store: storeName, key }) {
   });
 }
 
-function handleGetAll(databases, { db: dbName, store: storeName }) {
+function handleGetAll(databases, args) {
+  const { db: dbName, store: storeName } = args;
   return readOp(databases, dbName, storeName, (store, resolve) => {
-    const keysReq = store.getAllKeys();
-    const valuesReq = store.getAll();
+    const target = args.index ? store.index(args.index) : store;
+    const range = args.range ? decodeKeyRange(args.range) : undefined;
+    const keysReq = target.getAllKeys(range);
+    const valuesReq = target.getAll(range);
     let keys = null;
     let values = null;
     function tryResolve() {
@@ -234,16 +284,22 @@ function handleGetAll(databases, { db: dbName, store: storeName }) {
   });
 }
 
-function handleGetAllKeys(databases, { db: dbName, store: storeName }) {
+function handleGetAllKeys(databases, args) {
+  const { db: dbName, store: storeName } = args;
   return readOp(databases, dbName, storeName, (store, resolve) => {
-    const request = store.getAllKeys();
+    const target = args.index ? store.index(args.index) : store;
+    const range = args.range ? decodeKeyRange(args.range) : undefined;
+    const request = target.getAllKeys(range);
     request.onsuccess = () => resolve(request.result.map(encodeKey));
   });
 }
 
-function handleCount(databases, { db: dbName, store: storeName }) {
+function handleCount(databases, args) {
+  const { db: dbName, store: storeName } = args;
   return readOp(databases, dbName, storeName, (store, resolve) => {
-    const request = store.count();
+    const target = args.index ? store.index(args.index) : store;
+    const range = args.range ? decodeKeyRange(args.range) : undefined;
+    const request = target.count(range);
     request.onsuccess = () => resolve(request.result);
   });
 }
@@ -264,9 +320,13 @@ function handleAdd(databases, { db: dbName, store: storeName, value, key }) {
   });
 }
 
-function handleDelete(databases, { db: dbName, store: storeName, key }) {
+function handleDelete(databases, args) {
+  const { db: dbName, store: storeName } = args;
   return writeOp(databases, dbName, storeName, (store, _tx, resolve) => {
-    const request = store.delete(decodeKey(key));
+    const target = args.range
+      ? decodeKeyRange(args.range)
+      : decodeKey(args.key);
+    const request = store.delete(target);
     request.onsuccess = () => resolve({});
   });
 }

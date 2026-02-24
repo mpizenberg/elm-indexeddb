@@ -1,14 +1,18 @@
 module IndexedDb exposing
     ( Schema, schema, withStore
     , Store, defineStore, withKeyPath, withAutoIncrement
+    , Index, defineIndex, uniqueIndex, multiEntryIndex, withIndex
     , ExplicitKey, InlineKey, GeneratedKey
     , Db, open, deleteDatabase
-    , Key(..)
+    , Key(..), keyToPosix
+    , KeyRange, only, from, above, upTo, below, between
     , get, getAll, getAllKeys, count
+    , getAllInRange, getAllKeysInRange, countInRange
+    , getByIndex, getKeysByIndex, countByIndex
     , put, add, putMany
     , putAt, addAt, putManyAt
     , insert, replace, insertMany, replaceMany
-    , delete, deleteMany, clear
+    , delete, deleteMany, clear, deleteInRange
     , Error(..)
     )
 
@@ -27,8 +31,7 @@ module IndexedDb exposing
 
 # Not Yet Supported
 
-  - Indexes (secondary keys on stores)
-  - Key ranges / cursors (partial reads, iteration)
+  - Cursors (streaming iteration over large result sets)
   - Multi-store transactions
   - Compound key paths
 
@@ -37,6 +40,7 @@ module IndexedDb exposing
 
 @docs Schema, schema, withStore
 @docs Store, defineStore, withKeyPath, withAutoIncrement
+@docs Index, defineIndex, uniqueIndex, multiEntryIndex, withIndex
 @docs ExplicitKey, InlineKey, GeneratedKey
 
 
@@ -47,12 +51,19 @@ module IndexedDb exposing
 
 # Keys
 
-@docs Key
+@docs Key, keyToPosix
+
+
+# Key Ranges
+
+@docs KeyRange, only, from, above, upTo, below, between
 
 
 # Read Operations
 
 @docs get, getAll, getAllKeys, count
+@docs getAllInRange, getAllKeysInRange, countInRange
+@docs getByIndex, getKeysByIndex, countByIndex
 
 
 # Write Operations — InlineKey stores
@@ -72,7 +83,7 @@ module IndexedDb exposing
 
 # Delete Operations
 
-@docs delete, deleteMany, clear
+@docs delete, deleteMany, clear, deleteInRange
 
 
 # Errors
@@ -85,6 +96,7 @@ import ConcurrentTask exposing (ConcurrentTask)
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode exposing (Value)
 import Set
+import Time
 
 
 
@@ -120,6 +132,7 @@ type Store k
         { name : String
         , keyPath : Maybe String
         , autoIncrement : Bool
+        , indexes : List IndexConfig
         }
 
 
@@ -132,7 +145,7 @@ type Store k
 -}
 defineStore : String -> Store ExplicitKey
 defineStore name =
-    Store { name = name, keyPath = Nothing, autoIncrement = False }
+    Store { name = name, keyPath = Nothing, autoIncrement = False, indexes = [] }
 
 
 {-| Set a keyPath on a store, making it an InlineKey store.
@@ -161,6 +174,80 @@ withAutoIncrement (Store config) =
     Store { config | autoIncrement = True }
 
 
+{-| Add an index to a store. The index is used for secondary key lookups
+and range queries on fields other than the primary key.
+
+    eventsStore : Store InlineKey
+    eventsStore =
+        defineStore "events"
+            |> withKeyPath "id"
+            |> withIndex (defineIndex "by_timestamp" "timestamp")
+
+-}
+withIndex : Index -> Store k -> Store k
+withIndex (Index indexConfig) (Store config) =
+    Store { config | indexes = indexConfig :: config.indexes }
+
+
+
+-- INDEX
+
+
+{-| An index definition for secondary key lookups on a store.
+-}
+type Index
+    = Index IndexConfig
+
+
+type alias IndexConfig =
+    { name : String
+    , keyPath : String
+    , unique : Bool
+    , multiEntry : Bool
+    }
+
+
+{-| Define a new index with a name and keyPath. By default, the index is
+non-unique and single-entry.
+
+    byTimestamp : Index
+    byTimestamp =
+        defineIndex "by_timestamp" "timestamp"
+
+-}
+defineIndex : String -> String -> Index
+defineIndex name keyPath =
+    Index { name = name, keyPath = keyPath, unique = False, multiEntry = False }
+
+
+{-| Make an index enforce uniqueness. Adding a record with a duplicate
+value for this index's keyPath will fail with `AlreadyExists`.
+
+    byEmail : Index
+    byEmail =
+        defineIndex "by_email" "email"
+            |> uniqueIndex
+
+-}
+uniqueIndex : Index -> Index
+uniqueIndex (Index config) =
+    Index { config | unique = True }
+
+
+{-| Make an index treat array values as multiple entries. Each element
+of the array gets its own entry in the index, all pointing to the same record.
+
+    byTags : Index
+    byTags =
+        defineIndex "by_tags" "tags"
+            |> multiEntryIndex
+
+-}
+multiEntryIndex : Index -> Index
+multiEntryIndex (Index config) =
+    Index { config | multiEntry = True }
+
+
 
 -- SCHEMA
 
@@ -179,6 +266,7 @@ type alias StoreConfig =
     { name : String
     , keyPath : Maybe String
     , autoIncrement : Bool
+    , indexes : List IndexConfig
     }
 
 
@@ -275,6 +363,8 @@ deleteDatabase db =
 
     IntKey 42
 
+    PosixKey (Time.millisToPosix 1700000000000)
+
     CompoundKey [ StringKey "2024", IntKey 1 ]
 
 -}
@@ -282,7 +372,76 @@ type Key
     = StringKey String
     | IntKey Int
     | FloatKey Float
+    | PosixKey Time.Posix
     | CompoundKey (List Key)
+
+
+{-| Extract a `Time.Posix` from a key, if it is a `PosixKey`.
+-}
+keyToPosix : Key -> Maybe Time.Posix
+keyToPosix key =
+    case key of
+        PosixKey time ->
+            Just time
+
+        _ ->
+            Nothing
+
+
+
+-- KEY RANGE
+
+
+{-| A range of keys for filtering queries at the IndexedDB level.
+Use the convenience constructors below to create ranges.
+-}
+type KeyRange
+    = Only Key
+    | LowerBound Key Bool
+    | UpperBound Key Bool
+    | Bound Key Key Bool Bool
+
+
+{-| Match a single key exactly.
+-}
+only : Key -> KeyRange
+only key =
+    Only key
+
+
+{-| Match all keys greater than or equal to the given key (inclusive).
+-}
+from : Key -> KeyRange
+from key =
+    LowerBound key False
+
+
+{-| Match all keys strictly greater than the given key (exclusive).
+-}
+above : Key -> KeyRange
+above key =
+    LowerBound key True
+
+
+{-| Match all keys less than or equal to the given key (inclusive).
+-}
+upTo : Key -> KeyRange
+upTo key =
+    UpperBound key False
+
+
+{-| Match all keys strictly less than the given key (exclusive).
+-}
+below : Key -> KeyRange
+below key =
+    UpperBound key True
+
+
+{-| Match all keys between two bounds (inclusive on both ends).
+-}
+between : Key -> Key -> KeyRange
+between lower upper =
+    Bound lower upper False False
 
 
 
@@ -377,6 +536,141 @@ count db store =
             Encode.object
                 [ ( "db", Encode.string (getDbName db) )
                 , ( "store", Encode.string (getStoreName store) )
+                ]
+        }
+
+
+
+-- RANGE READ OPERATIONS
+
+
+{-| Get all records whose primary key falls within a range, with their keys.
+-}
+getAllInRange : Db -> Store k -> KeyRange -> Decoder a -> ConcurrentTask Error (List ( Key, a ))
+getAllInRange db store range decoder =
+    ConcurrentTask.define
+        { function = "indexeddb:getAll"
+        , expect =
+            ConcurrentTask.expectJson
+                (Decode.list
+                    (Decode.map2 Tuple.pair
+                        (Decode.field "key" keyDecoder)
+                        (Decode.field "value" decoder)
+                    )
+                )
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "range", encodeKeyRange range )
+                ]
+        }
+
+
+{-| Get all primary keys that fall within a range.
+-}
+getAllKeysInRange : Db -> Store k -> KeyRange -> ConcurrentTask Error (List Key)
+getAllKeysInRange db store range =
+    ConcurrentTask.define
+        { function = "indexeddb:getAllKeys"
+        , expect = ConcurrentTask.expectJson (Decode.list keyDecoder)
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "range", encodeKeyRange range )
+                ]
+        }
+
+
+{-| Count records whose primary key falls within a range.
+-}
+countInRange : Db -> Store k -> KeyRange -> ConcurrentTask Error Int
+countInRange db store range =
+    ConcurrentTask.define
+        { function = "indexeddb:count"
+        , expect = ConcurrentTask.expectJson Decode.int
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "range", encodeKeyRange range )
+                ]
+        }
+
+
+
+-- INDEX READ OPERATIONS
+
+
+{-| Get all records matching an index key range, with their primary keys.
+The returned keys are primary keys, usable with `get`, `delete`, etc.
+
+    Idb.getByIndex db
+        eventsStore
+        byTimestamp
+        (Idb.between (Idb.PosixKey start) (Idb.PosixKey end))
+        eventDecoder
+
+-}
+getByIndex : Db -> Store k -> Index -> KeyRange -> Decoder a -> ConcurrentTask Error (List ( Key, a ))
+getByIndex db store index range decoder =
+    ConcurrentTask.define
+        { function = "indexeddb:getAll"
+        , expect =
+            ConcurrentTask.expectJson
+                (Decode.list
+                    (Decode.map2 Tuple.pair
+                        (Decode.field "key" keyDecoder)
+                        (Decode.field "value" decoder)
+                    )
+                )
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "index", Encode.string (getIndexName index) )
+                , ( "range", encodeKeyRange range )
+                ]
+        }
+
+
+{-| Get all primary keys for records matching an index key range.
+-}
+getKeysByIndex : Db -> Store k -> Index -> KeyRange -> ConcurrentTask Error (List Key)
+getKeysByIndex db store index range =
+    ConcurrentTask.define
+        { function = "indexeddb:getAllKeys"
+        , expect = ConcurrentTask.expectJson (Decode.list keyDecoder)
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "index", Encode.string (getIndexName index) )
+                , ( "range", encodeKeyRange range )
+                ]
+        }
+
+
+{-| Count records matching an index key range.
+-}
+countByIndex : Db -> Store k -> Index -> KeyRange -> ConcurrentTask Error Int
+countByIndex db store index range =
+    ConcurrentTask.define
+        { function = "indexeddb:count"
+        , expect = ConcurrentTask.expectJson Decode.int
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "index", Encode.string (getIndexName index) )
+                , ( "range", encodeKeyRange range )
                 ]
         }
 
@@ -645,6 +939,23 @@ deleteMany db store keys =
         }
 
 
+{-| Delete all records whose primary key falls within a range.
+-}
+deleteInRange : Db -> Store k -> KeyRange -> ConcurrentTask Error ()
+deleteInRange db store range =
+    ConcurrentTask.define
+        { function = "indexeddb:delete"
+        , expect = ConcurrentTask.expectWhatever
+        , errors = ConcurrentTask.expectErrors errorDecoder
+        , args =
+            Encode.object
+                [ ( "db", Encode.string (getDbName db) )
+                , ( "store", Encode.string (getStoreName store) )
+                , ( "range", encodeKeyRange range )
+                ]
+        }
+
+
 
 -- INTERNAL: Encoders / Decoders
 
@@ -656,6 +967,11 @@ getDbName (Db name) =
 
 getStoreName : Store k -> String
 getStoreName (Store config) =
+    config.name
+
+
+getIndexName : Index -> String
+getIndexName (Index config) =
     config.name
 
 
@@ -680,6 +996,12 @@ encodeKey key =
                 , ( "value", Encode.float f )
                 ]
 
+        PosixKey time ->
+            Encode.object
+                [ ( "type", Encode.string "posix" )
+                , ( "value", Encode.int (Time.posixToMillis time) )
+                ]
+
         CompoundKey keys ->
             Encode.object
                 [ ( "type", Encode.string "compound" )
@@ -701,6 +1023,10 @@ keyDecoder =
 
                     "float" ->
                         Decode.map FloatKey (Decode.field "value" Decode.float)
+
+                    "posix" ->
+                        Decode.map (\ms -> PosixKey (Time.millisToPosix ms))
+                            (Decode.field "value" Decode.int)
 
                     "compound" ->
                         Decode.map CompoundKey
@@ -735,7 +1061,51 @@ encodeStoreConfig config =
                     Encode.null
           )
         , ( "autoIncrement", Encode.bool config.autoIncrement )
+        , ( "indexes", Encode.list encodeIndexConfig config.indexes )
         ]
+
+
+encodeIndexConfig : IndexConfig -> Value
+encodeIndexConfig config =
+    Encode.object
+        [ ( "name", Encode.string config.name )
+        , ( "keyPath", Encode.string config.keyPath )
+        , ( "unique", Encode.bool config.unique )
+        , ( "multiEntry", Encode.bool config.multiEntry )
+        ]
+
+
+encodeKeyRange : KeyRange -> Value
+encodeKeyRange range =
+    case range of
+        Only key ->
+            Encode.object
+                [ ( "type", Encode.string "only" )
+                , ( "key", encodeKey key )
+                ]
+
+        LowerBound key isOpen ->
+            Encode.object
+                [ ( "type", Encode.string "lowerBound" )
+                , ( "key", encodeKey key )
+                , ( "open", Encode.bool isOpen )
+                ]
+
+        UpperBound key isOpen ->
+            Encode.object
+                [ ( "type", Encode.string "upperBound" )
+                , ( "key", encodeKey key )
+                , ( "open", Encode.bool isOpen )
+                ]
+
+        Bound lower upper lowerOpen upperOpen ->
+            Encode.object
+                [ ( "type", Encode.string "bound" )
+                , ( "lower", encodeKey lower )
+                , ( "upper", encodeKey upper )
+                , ( "lowerOpen", Encode.bool lowerOpen )
+                , ( "upperOpen", Encode.bool upperOpen )
+                ]
 
 
 errorDecoder : Decoder Error
