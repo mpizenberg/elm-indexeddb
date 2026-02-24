@@ -260,8 +260,7 @@ Idb.open mySchema
 
 Track a version number in a metadata store to know which data migrations to run.
 
-## Not Yet Supported
+## Not Supported
 
 - Cursors (streaming iteration over large result sets)
 - Multi-store transactions
-- Compound key paths
