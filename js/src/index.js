@@ -124,7 +124,8 @@ function readOp(databases, dbName, storeName, fn) {
       const tx = db.transaction(storeName, "readonly");
       const store = tx.objectStore(storeName);
       fn(store, resolve);
-      tx.onerror = () => resolve(normalizeError(tx.error));
+      tx.onerror = (event) =>
+        resolve(normalizeError(tx.error || event.target.error));
     } catch (e) {
       resolve(normalizeError(e));
     }
@@ -139,7 +140,8 @@ function writeOp(databases, dbName, storeName, fn) {
       const tx = db.transaction(storeName, "readwrite");
       const store = tx.objectStore(storeName);
       fn(store, tx, resolve);
-      tx.onerror = () => resolve(normalizeError(tx.error));
+      tx.onerror = (event) =>
+        resolve(normalizeError(tx.error || event.target.error));
     } catch (e) {
       resolve(normalizeError(e));
     }
