@@ -225,8 +225,24 @@ function handleOpen(databases, { name, version, stores }) {
     };
 
     request.onsuccess = (event) => {
-      databases.set(name, event.target.result);
+      const db = event.target.result;
+      // A newer tab that bumps the schema version can't upgrade while this
+      // connection stays open. Close it when that happens so the other tab's
+      // upgrade proceeds instead of hanging; operations here fail afterwards,
+      // which is far better than blocking every tab.
+      db.onversionchange = () => {
+        db.close();
+        databases.delete(name);
+      };
+      databases.set(name, db);
       resolve({});
+    };
+
+    request.onblocked = () => {
+      resolve({
+        error:
+          "DATABASE_ERROR:Upgrade blocked by another open tab; close other tabs for this app and reload.",
+      });
     };
 
     request.onerror = (event) => {
